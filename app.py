@@ -125,13 +125,36 @@ if "chat_history" not in st.session_state:
 # ---------- File Upload ----------
 st.header("1️⃣ Upload Documents")
 
+# Show current document count
+if st.session_state.documents:
+    st.info(f"📚 Current knowledge base: {len(st.session_state.documents)} document(s)")
+
 uploaded_files = st.file_uploader(
     "Drop your files here",
     type=["pdf", "docx", "xlsx", "csv", "txt"],
     accept_multiple_files=True
 )
 
-if uploaded_files and st.button("🔄 Process Documents", type="primary"):
+# Show two buttons if we already have documents
+col1, col2 = st.columns(2)
+
+with col1:
+    process_btn = st.button("🔄 Process Documents", type="primary", disabled=not uploaded_files)
+
+with col2:
+    if st.session_state.documents:
+        add_btn = st.button("➕ Add to Existing", disabled=not uploaded_files)
+    else:
+        add_btn = False
+
+# Determine mode: new or add
+process_mode = None
+if process_btn:
+    process_mode = "new"
+elif add_btn:
+    process_mode = "add"
+
+if uploaded_files and process_mode:
     # Load embedding model (cached after first load)
     with st.spinner("Loading embedding model..."):
         embedding_model = load_embedding_model()
@@ -198,20 +221,27 @@ if uploaded_files and st.button("🔄 Process Documents", type="primary"):
             else:
                 chunked_documents.append(doc)
 
-        # Build vector store
-        status.write("📦 Building vector store...")
         embedding_fn = BGEEmbeddings(embedding_model)
-        vector_store = Chroma.from_documents(
-            documents=chunked_documents,
-            embedding=embedding_fn,
-            collection_name="rag_docs"
-        )
 
-        st.session_state.documents = all_documents
-        st.session_state.vector_store = vector_store
-
-        status.update(label="✅ Processing complete!", state="complete")
-        st.success(f"Processed {len(all_documents)} document(s) into {len(chunked_documents)} chunks.")
+        if process_mode == "add" and st.session_state.vector_store:
+            # Add to existing vector store
+            status.write("📦 Adding to existing knowledge base...")
+            st.session_state.vector_store.add_documents(chunked_documents)
+            st.session_state.documents.extend(all_documents)
+            status.update(label="✅ Documents added!", state="complete")
+            st.success(f"Added {len(all_documents)} document(s) ({len(chunked_documents)} chunks) to existing knowledge base.")
+        else:
+            # Build new vector store
+            status.write("📦 Building vector store...")
+            vector_store = Chroma.from_documents(
+                documents=chunked_documents,
+                embedding=embedding_fn,
+                collection_name="rag_docs"
+            )
+            st.session_state.documents = all_documents
+            st.session_state.vector_store = vector_store
+            status.update(label="✅ Processing complete!", state="complete")
+            st.success(f"Processed {len(all_documents)} document(s) into {len(chunked_documents)} chunks.")
 
 
 # ---------- Document Preview ----------
