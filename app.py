@@ -93,7 +93,7 @@ def parse_txt(file_path):
     return [LCDocument(page_content=text, metadata={"source": os.path.basename(file_path), "page": 1})]
 
 
-# ---------- Get API Key from Secrets ----------
+# ---------- Get API Key from Secrets or UI ----------
 groq_api_key = ""
 try:
     groq_api_key = st.secrets["GROQ_API_KEY"]
@@ -105,10 +105,15 @@ with st.sidebar:
     st.header("⚙️ Configuration")
     st.markdown("**Supported formats:** PDF, DOCX, XLSX, CSV, TXT")
     st.markdown("---")
-    if groq_api_key:
-        st.success("✅ API Key configured")
+    if not groq_api_key:
+        groq_api_key = st.text_input(
+            "🔑 Groq API Key",
+            type="password",
+            placeholder="Enter your Groq API key...",
+            help="Get yours at https://console.groq.com"
+        )
     else:
-        st.error("❌ GROQ_API_KEY not found in secrets")
+        st.success("✅ API Key configured")
     st.markdown("---")
     st.markdown("Built with LangChain + ChromaDB + Groq")
 
