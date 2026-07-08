@@ -25,9 +25,15 @@ st.markdown("Upload documents, ask questions, get AI-powered answers from your f
 # ---------- Embedding Model ----------
 @st.cache_resource(show_spinner="Loading embedding model (first time only)...")
 def load_embedding_model():
-    cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "sentence_transformers")
-    os.makedirs(cache_dir, exist_ok=True)
-    return SentenceTransformer("all-MiniLM-L6-v2", cache_folder=cache_dir)
+    # Use /tmp for Databricks compatibility, falls back to home cache
+    for cache_dir in ["/tmp/sentence_transformers", os.path.join(os.path.expanduser("~"), ".cache", "sentence_transformers")]:
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            model = SentenceTransformer("all-MiniLM-L6-v2", cache_folder=cache_dir)
+            return model
+        except Exception:
+            continue
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
 
 class BGEEmbeddings(Embeddings):
