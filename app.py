@@ -266,6 +266,65 @@ if st.session_state.vector_store:
             with st.chat_message(msg["role"]):
                 st.markdown(msg["content"])
 
+        # Add documents inline with chat
+        with st.expander("📎 Add more documents to knowledge base"):
+            new_files = st.file_uploader(
+                "Upload additional documents",
+                type=["pdf", "docx", "xlsx", "csv", "txt"],
+                accept_multiple_files=True,
+                key="chat_upload"
+            )
+            if new_files and st.button("➕ Add to Knowledge Base"):
+                with st.spinner("Adding documents..."):
+                    embedding_model = load_embedding_model()
+                    new_docs = []
+                    for uploaded_file in new_files:
+                        ext = os.path.splitext(uploaded_file.name)[1].lower()
+                        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+                            tmp.write(uploaded_file.read())
+                            tmp_path = tmp.name
+                        try:
+                            if ext == ".pdf":
+                                docs = parse_pdf(tmp_path)
+                            elif ext == ".docx":
+                                docs = parse_docx(tmp_path)
+                            elif ext == ".xlsx":
+                                docs = parse_excel(tmp_path)
+                            elif ext == ".csv":
+                                docs = parse_csv(tmp_path)
+                            elif ext == ".txt":
+                                docs = parse_txt(tmp_path)
+                            else:
+                                docs = []
+                            new_docs.extend(docs)
+                        except Exception as e:
+                            st.error(f"❌ Error: {e}")
+                        finally:
+                            try:
+                                os.remove(tmp_path)
+                            except:
+                                pass
+
+                    if new_docs:
+                        text_splitter = RecursiveCharacterTextSplitter(
+                            chunk_size=1000, chunk_overlap=200,
+                            separators=["\n\n", "\n", ". ", " ", ""]
+                        )
+                        chunked = []
+                        for doc in new_docs:
+                            if len(doc.page_content.strip()) > 50:
+                                chunks = text_splitter.create_documents(
+                                    [doc.page_content], metadatas=[doc.metadata]
+                                )
+                                chunked.extend(chunks)
+                            else:
+                                chunked.append(doc)
+
+                        st.session_state.vector_store.add_documents(chunked)
+                        st.session_state.documents.extend(new_docs)
+                        st.success(f"✅ Added {len(new_docs)} document(s)!")
+                        st.rerun()
+
         # Chat input
         user_question = st.chat_input("Ask a question about your documents...")
 
