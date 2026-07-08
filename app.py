@@ -25,9 +25,6 @@ st.markdown("Upload documents, ask questions, get AI-powered answers from your f
 # ---------- Embedding Model ----------
 @st.cache_resource(show_spinner="Loading embedding model (first time only)...")
 def load_embedding_model():
-    # Using a smaller, faster model for better performance
-    # Model will be cached after first download
-    import os
     cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "sentence_transformers")
     os.makedirs(cache_dir, exist_ok=True)
     return SentenceTransformer("all-MiniLM-L6-v2", cache_folder=cache_dir)
@@ -44,42 +41,14 @@ class BGEEmbeddings(Embeddings):
         return self.model.encode(text, normalize_embeddings=True).tolist()
 
 
-# ---------- OCR Setup ----------
-@st.cache_resource(show_spinner="Loading OCR engine (first time only)...")
-def load_ocr_engine():
-    from rapidocr_onnxruntime import RapidOCR
-    return RapidOCR()
-
-
-def extract_text_from_image(image_path, ocr_engine):
-    result, _ = ocr_engine(image_path)
-    if result is None:
-        return ""
-    return "\n".join([line[1] for line in result])
-
-
-def ocr_pdf_page(page, ocr_engine):
-    pix = page.get_pixmap(dpi=300)
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp_path = tmp.name
-        pix.save(tmp_path)
-    text = extract_text_from_image(tmp_path, ocr_engine)
-    try:
-        os.remove(tmp_path)
-    except PermissionError:
-        pass  # Windows may still hold the file briefly
-    return text
-
-
 # ---------- Document Parsers ----------
-def parse_pdf(file_path, ocr_engine):
+def parse_pdf(file_path):
+    """Parse PDF - extract text from each page"""
     documents = []
     pdf = fitz.open(file_path)
     for page_num in range(len(pdf)):
         page = pdf.load_page(page_num)
         text = page.get_text().strip()
-        if not text:
-            text = ocr_pdf_page(page, ocr_engine)
         if text:
             documents.append(
                 LCDocument(
@@ -91,12 +60,14 @@ def parse_pdf(file_path, ocr_engine):
 
 
 def parse_docx(file_path):
+    """Parse Word document"""
     doc = Document(file_path)
     text = "\n".join(para.text for para in doc.paragraphs if para.text.strip())
     return [LCDocument(page_content=text, metadata={"source": os.path.basename(file_path), "page": 1})]
 
 
 def parse_excel(file_path):
+    """Parse Excel file - each sheet becomes a document"""
     documents = []
     excel = pd.ExcelFile(file_path)
     for sheet in excel.sheet_names:
@@ -109,35 +80,38 @@ def parse_excel(file_path):
 
 
 def parse_csv(file_path):
+    """Parse CSV file"""
     df = pd.read_csv(file_path)
     text = df.astype(str).to_string(index=False)
     return [LCDocument(page_content=text, metadata={"source": os.path.basename(file_path), "page": 1})]
 
 
 def parse_txt(file_path):
+    """Parse text file"""
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         text = f.read()
-    return [LCDocument(page_content=text, metadata={"source": os.path.basename(file_path), "page": 1})]
-
-
-def parse_image(file_path, ocr_engine):
-    text = extract_text_from_image(file_path, ocr_engine)
     return [LCDocument(page_content=text, metadata={"source": os.path.basename(file_path), "page": 1})]
 
 
 # ---------- Sidebar: API Key ----------
 with st.sidebar:
     st.header("⚙️ Configuration")
-    # Get API key from Streamlit secrets or user input
-    DEFAULT_GROQ_KEY = os.getenv("GROQ_API_KEY", "")
+    
+    # Try to get API key from secrets first, then env, then user input
+    default_key = ""
+    try:
+        default_key = st.secrets.get("GROQ_API_KEY", "")
+    except:
+        default_key = os.getenv("GROQ_API_KEY", "")
+    
     groq_api_key = st.text_input(
         "Groq API Key",
-        value=DEFAULT_GROQ_KEY,
+        value=default_key,
         type="password",
         help="Get yours at https://console.groq.com"
     )
     st.markdown("---")
-    st.markdown("**Supported formats:** PDF, DOCX, XLSX, CSV, TXT, PNG, JPG")
+    st.markdown("**Supported formats:** PDF, DOCX, XLSX, CSV, TXT")
     st.markdown("---")
     st.markdown("Built with LangChain + ChromaDB + Groq")
 
@@ -156,14 +130,13 @@ st.header("1️⃣ Upload Documents")
 
 uploaded_files = st.file_uploader(
     "Drop your files here",
-    type=["pdf", "docx", "xlsx", "csv", "txt", "png", "jpg", "jpeg"],
+    type=["pdf", "docx", "xlsx", "csv", "txt"],
     accept_multiple_files=True
 )
 
 if uploaded_files and st.button("🔄 Process Documents", type="primary"):
-    # Load models first (cached after first load)
-    with st.spinner("Loading models..."):
-        ocr_engine = load_ocr_engine()
+    # Load embedding model (cached after first load)
+    with st.spinner("Loading embedding model..."):
         embedding_model = load_embedding_model()
     
     all_documents = []
@@ -180,7 +153,7 @@ if uploaded_files and st.button("🔄 Process Documents", type="primary"):
 
         try:
             if ext == ".pdf":
-                docs = parse_pdf(tmp_path, ocr_engine)
+                docs = parse_pdf(tmp_path)
             elif ext == ".docx":
                 docs = parse_docx(tmp_path)
             elif ext == ".xlsx":
@@ -189,8 +162,6 @@ if uploaded_files and st.button("🔄 Process Documents", type="primary"):
                 docs = parse_csv(tmp_path)
             elif ext == ".txt":
                 docs = parse_txt(tmp_path)
-            elif ext in [".png", ".jpg", ".jpeg"]:
-                docs = parse_image(tmp_path, ocr_engine)
             else:
                 docs = []
                 status.write(f"⚠️ Unsupported: {uploaded_file.name}")
@@ -210,9 +181,8 @@ if uploaded_files and st.button("🔄 Process Documents", type="primary"):
         progress.progress((i + 1) / len(uploaded_files))
 
     if all_documents:
-        # Fast chunking with recursive text splitter
+        # Chunk documents
         status.write("🧠 Chunking documents...")
-        from langchain_text_splitters import RecursiveCharacterTextSplitter
 
         text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=1000,
